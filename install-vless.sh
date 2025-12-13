@@ -2,11 +2,11 @@
 # ==================================================
 # Скрипт автоматической установки Xray (VLESS + WS + TLS / VLESS + XHTTP)
 # Ориентирован на: Ubuntu 20.04+, Debian 10+, CentOS 7+
-# Особенности: Самоподписанный сертификат (подключение по IP), порт 443 для WS+TLS, опция VLESS+XHTTP с SNI google.com.
+# Особенности: Самоподписанный сертификат, порт 443 для WS+TLS, 2053 для XHTTP, SNI google.com.
 # Включает автоматическое включение TCP BBR для оптимизации скорости.
 # ==================================================
 
-# Режим установки: ws или xhttp
+# Режим установки: ws, xhttp или both
 INSTALL_MODE="ws" # по умолчанию WS+TLS
 
 # Конфигурационные переменные
@@ -36,15 +36,24 @@ if [[ "$EUID" -ne 0 ]]; then
 fi
 
 # Выбор режима установки
-read -rp "Выберите режим установки (1 - VLESS+WS+TLS:443, 2 - VLESS+XHTTP:2053) [1/2]: " MODE_CHOICE
+echo -e "${BCyan}Выберите режим установки:${Color_Off}"
+echo "  1 - VLESS + WS + TLS (порт 443, SNI google.com)"
+echo "  2 - VLESS + XHTTP (порт 2053, SNI google.com)"
+echo "  3 - ОБА РЕЖИМА (порты 443 и 2053, общий UUID)"
+read -rp "Введите номер [1/2/3]: " MODE_CHOICE
+
 case "$MODE_CHOICE" in
   2)
     INSTALL_MODE="xhttp"
-    log_info "Выбран режим установки: VLESS + XHTTP (порт ${VLESS_PORT_XHTTP}, SNI google.com)"
+    log_info "Выбран режим: VLESS + XHTTP (порт ${VLESS_PORT_XHTTP}, SNI google.com)"
+    ;;
+  3)
+    INSTALL_MODE="both"
+    log_info "Выбран режим: VLESS + WS + XHTTP (порты ${VLESS_PORT_WS} и ${VLESS_PORT_XHTTP}, SNI google.com)"
     ;;
   *)
     INSTALL_MODE="ws"
-    log_info "Выбран режим установки: VLESS + WS + TLS (порт ${VLESS_PORT_WS}, SNI google.com)"
+    log_info "Выбран режим: VLESS + WS + TLS (порт ${VLESS_PORT_WS}, SNI google.com)"
     ;;
 esac
 
@@ -60,11 +69,12 @@ fi
 
 if [[ -z "$USER_HOME" ]]; then
     USER_HOME="/root"
-    log_warn "Не удалось определить домашний каталог пользователя sudo или getent не найден. QR-код будет сохранен в ${USER_HOME}"
+    log_warn "Не удалось определить домашний каталог пользователя sudo. QR-коды будут в ${USER_HOME}"
 fi
 
-QR_CODE_FILE="${USER_HOME}/vless_qr.png"
-mkdir -p "$(dirname "$QR_CODE_FILE")"
+QR_CODE_FILE_WS="${USER_HOME}/vless_ws_qr.png"
+QR_CODE_FILE_XHTTP="${USER_HOME}/vless_xhttp_qr.png"
+mkdir -p "$(dirname "$QR_CODE_FILE_WS")"
 
 if [[ -n "$SUDO_USER" && -n "$USER_HOME" && "$USER_HOME" != "/root" ]]; then
     NEED_CHOWN_QR=true
@@ -74,7 +84,6 @@ fi
 
 log_info "Запуск скрипта установки VLESS VPN на базе Xray..."
 log_info "Режим: ${INSTALL_MODE}"
-log_info "QR-код будет сохранен в: ${QR_CODE_FILE}"
 
 set -eu
 
@@ -82,28 +91,26 @@ set -eu
 log_info "Определение операционной системы и установка зависимостей..."
 
 if [[ ! -f /etc/os-release ]]; then
-    log_error "Файл /etc/os-release не найден. Не удалось определить операционную систему."
+    log_error "Файл /etc/os-release не найден. Не удалось определить ОС."
 fi
 
 . /etc/os-release
 
 if [[ -z "${ID:-}" ]]; then
-    log_error "Не удалось определить ID операционной системы в /etc/os-release."
+    log_error "Не удалось определить ID ОС в /etc/os-release."
 fi
 
 OS="$ID"
 
 if [[ -z "${VERSION_ID:-}" ]]; then
-    log_warn "VERSION_ID не определен в /etc/os-release. Возможно, вы используете rolling release или testing версию."
+    log_warn "VERSION_ID не определен. Возможно, rolling release."
     if [[ -n "${VERSION_CODENAME:-}" ]]; then
         VERSION_ID="${VERSION_CODENAME}"
         log_info "Используется VERSION_CODENAME: ${VERSION_ID}"
     else
         VERSION_ID="unknown"
-        log_warn "VERSION_ID установлен в 'unknown'. Продолжаем с базовыми проверками."
+        log_warn "VERSION_ID установлен в 'unknown'."
     fi
-else
-    VERSION_ID="${VERSION_ID}"
 fi
 
 log_info "Обнаружена ОС: $OS ${VERSION_ID}"
@@ -112,42 +119,40 @@ log_info "Обновление списка пакетов и установка
 
 case $OS in
     ubuntu|debian|linuxmint|pop|neon)
-        log_info "Обнаружен Debian/Ubuntu-based дистрибутив. Установка пакетов..."
+        log_info "Обнаружен Debian/Ubuntu. Установка пакетов..."
         apt update -y || log_error "Не удалось обновить список пакетов."
         apt install -y curl wget unzip socat qrencode jq coreutils openssl bash-completion || log_error "Не удалось установить зависимости."
         ;;
     centos|almalinux|rocky|rhel|fedora)
-        log_info "Обнаружен RHEL/CentOS-based дистрибутив. Установка пакетов..."
+        log_info "Обнаружен RHEL/CentOS. Установка пакетов..."
         if [[ "$OS" == "centos" ]]; then
             MAJOR_VERSION=$(echo "$VERSION_ID" | cut -d. -f1)
             if [[ "$MAJOR_VERSION" == "7" ]]; then
-                log_info "Установка репозитория EPEL для CentOS 7..."
+                log_info "Установка EPEL для CentOS 7..."
                 yum install -y epel-release || log_warn "Не удалось установить epel-release."
             fi
         fi
         if command -v dnf &> /dev/null; then
-            log_info "Используется dnf для установки пакетов..."
-            dnf update -y || log_warn "Не удалось обновить систему через dnf."
-            dnf install -y curl wget unzip socat qrencode jq coreutils openssl bash-completion policycoreutils-python-utils util-linux || log_error "Не удалось установить зависимости через dnf."
+            dnf update -y || log_warn "Не удалось обновить через dnf."
+            dnf install -y curl wget unzip socat qrencode jq coreutils openssl bash-completion policycoreutils-python-utils util-linux || log_error "Не удалось установить зависимости."
         else
-            log_info "Используется yum для установки пакетов..."
-            yum update -y || log_warn "Не удалось обновить систему через yum."
+            yum update -y || log_warn "Не удалось обновить через yum."
             if [[ "$OS" == "centos" ]] && [[ "${MAJOR_VERSION:-}" == "7" ]]; then
-                yum install -y curl wget unzip socat qrencode jq coreutils openssl bash-completion policycoreutils-python util-linux || log_error "Не удалось установить зависимости через yum."
+                yum install -y curl wget unzip socat qrencode jq coreutils openssl bash-completion policycoreutils-python util-linux || log_error "Не удалось установить зависимости."
             else
-                yum install -y curl wget unzip socat qrencode jq coreutils openssl bash-completion policycoreutils-python-utils util-linux || log_error "Не удалось установить зависимости через yum."
+                yum install -y curl wget unzip socat qrencode jq coreutils openssl bash-completion policycoreutils-python-utils util-linux || log_error "Не удалось установить зависимости."
             fi
         fi
         ;;
     *)
-        log_error "Операционная система $OS не поддерживается этим скриптом. Поддерживаются: Ubuntu, Debian, CentOS, AlmaLinux, Rocky Linux."
+        log_error "ОС $OS не поддерживается. Поддержка: Ubuntu, Debian, CentOS, AlmaLinux, Rocky."
         ;;
 esac
 
-log_info "Зависимости успешно установлены."
+log_info "Зависимости установлены."
 
 # Включение TCP BBR
-log_info "Включение TCP BBR для оптимизации скорости сети..."
+log_info "Включение TCP BBR для оптимизации скорости..."
 
 BBR_CONF="/etc/sysctl.d/99-bbr.conf"
 
@@ -159,89 +164,94 @@ if ! grep -q "net.ipv4.tcp_congestion_control=bbr" "$BBR_CONF" 2>/dev/null ; the
     echo "net.ipv4.tcp_congestion_control=bbr" | tee -a "$BBR_CONF" > /dev/null
 fi
 
-log_info "Применение настроек sysctl для BBR..."
 if sysctl -p "$BBR_CONF"; then
-    log_info "Настройки TCP BBR успешно применены."
+    log_info "TCP BBR успешно применен."
 else
-    log_warn "Не удалось применить настройки sysctl из $BBR_CONF. Возможно, BBR не поддерживается ядром вашей системы (требуется ядро 4.9+)."
+    log_warn "BBR не поддерживается ядром (требуется 4.9+)."
 fi
 
 # Установка Xray
-log_info "Установка последней стабильной версии Xray..."
+log_info "Установка Xray..."
 
 if ! bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install; then
-    log_error "Ошибка при выполнении скрипта установки Xray."
+    log_error "Ошибка при установке Xray."
 fi
 
 if ! command -v xray &> /dev/null; then
-    log_error "Команда 'xray' не найдена после установки."
+    log_error "'xray' не найден после установки."
 fi
 
-log_info "Xray успешно установлен: $(xray version | head -n 1)"
+log_info "Xray установлен: $(xray version | head -n 1)"
 
 # Генерация UUID
 USER_UUID=$(xray uuid)
 if [[ -z "$USER_UUID" ]]; then
-    log_error "Не удалось сгенерировать UUID с помощью 'xray uuid'."
+    log_error "Не удалось сгенерировать UUID."
 fi
 
-log_info "Сгенерирован UUID пользователя: ${USER_UUID}"
+log_info "UUID: ${USER_UUID}"
 
 # Настройка Firewall
-if [[ "$INSTALL_MODE" == "ws" ]]; then
-  TARGET_PORT=${VLESS_PORT_WS}
+log_info "Настройка брандмауэра..."
+
+if [[ "$INSTALL_MODE" == "both" ]]; then
+  PORTS_TO_OPEN="${VLESS_PORT_WS} ${VLESS_PORT_XHTTP}"
 else
-  TARGET_PORT=${VLESS_PORT_XHTTP}
+  if [[ "$INSTALL_MODE" == "ws" ]]; then
+    PORTS_TO_OPEN="${VLESS_PORT_WS}"
+  else
+    PORTS_TO_OPEN="${VLESS_PORT_XHTTP}"
+  fi
 fi
 
-log_info "Настройка брандмауэра для порта ${TARGET_PORT}/tcp..."
-
 if command -v ufw &> /dev/null; then
-    log_info "Обнаружен UFW. Открытие порта ${TARGET_PORT}/tcp..."
-    ufw allow ${TARGET_PORT}/tcp || log_warn "Команда 'ufw allow' завершилась с ошибкой."
+    for PORT in $PORTS_TO_OPEN; do
+      log_info "UFW: открытие порта ${PORT}/tcp..."
+      ufw allow ${PORT}/tcp || log_warn "ufw allow ошибка."
+    done
     if ufw status | grep -qw active; then
-        ufw reload || log_error "Не удалось перезагрузить правила UFW."
+        ufw reload || log_error "Не удалось перезагрузить UFW."
     else
-        log_warn "UFW не активен (inactive). Правило добавлено, но firewall не работает. Активируйте его командой 'sudo ufw enable', если нужно."
+        log_warn "UFW неактивен. Активируйте: sudo ufw enable"
     fi
-    log_info "Порт ${TARGET_PORT}/tcp настроен в UFW."
 elif command -v firewall-cmd &> /dev/null; then
-    log_info "Обнаружен firewalld. Открытие порта ${TARGET_PORT}/tcp..."
-    firewall-cmd --permanent --add-port=${TARGET_PORT}/tcp || log_warn "Команда 'firewall-cmd --add-port' завершилась с ошибкой."
+    for PORT in $PORTS_TO_OPEN; do
+      log_info "firewalld: открытие ${PORT}/tcp..."
+      firewall-cmd --permanent --add-port=${PORT}/tcp || log_warn "firewall-cmd ошибка."
+    done
     if systemctl is-active --quiet firewalld; then
-        firewall-cmd --reload || log_error "Не удалось перезагрузить правила firewalld."
+        firewall-cmd --reload || log_error "Не удалось перезагрузить firewalld."
     else
-         log_warn "Служба firewalld не активна. Правило добавлено, но firewall не работает."
+         log_warn "firewalld неактивен."
     fi
-    log_info "Порт ${TARGET_PORT}/tcp настроен в firewalld."
     if [[ -f /usr/sbin/sestatus ]] && sestatus | grep "SELinux status:" | grep -q "enabled"; then
-        log_info "Обнаружен включенный SELinux. Настройка для порта ${TARGET_PORT}..."
+        log_info "SELinux включен. Настройка..."
         if command -v semanage &> /dev/null; then
-            semanage port -a -t http_port_t -p tcp ${TARGET_PORT} 2>/dev/null || semanage port -m -t http_port_t -p tcp ${TARGET_PORT} || log_warn "Не удалось добавить правило SELinux для порта ${TARGET_PORT}."
-            setsebool -P httpd_can_network_connect 1 || log_warn "Не удалось установить булево значение httpd_can_network_connect в SELinux."
-            log_info "SELinux настроен для порта ${TARGET_PORT}."
+            for PORT in $PORTS_TO_OPEN; do
+              semanage port -a -t http_port_t -p tcp ${PORT} 2>/dev/null || semanage port -m -t http_port_t -p tcp ${PORT} || log_warn "SELinux порт ${PORT} ошибка."
+            done
+            setsebool -P httpd_can_network_connect 1 || log_warn "SELinux httpd_can_network_connect ошибка."
+            log_info "SELinux настроен."
         else
-            log_warn "Команда 'semanage' не найдена. Пропускаем настройку SELinux."
+            log_warn "'semanage' не найден."
         fi
     fi
 else
-    log_warn "Не удалось обнаружить UFW или firewalld. Убедитесь, что порт ${TARGET_PORT}/tcp открыт вручную."
+    log_warn "UFW/firewalld не найдены. Откройте порты вручную: $PORTS_TO_OPEN"
 fi
 
-# Генерация самоподписанного сертификата TLS
-log_info "Генерация самоподписанного TLS сертификата..."
+# Генерация сертификата TLS
+log_info "Генерация TLS сертификата..."
 
 SERVER_IP=$(curl -s4 https://ipinfo.io/ip || curl -s4 https://api.ipify.org || curl -s4 https://ifconfig.me)
 
 if [[ -z "$SERVER_IP" ]]; then
-    log_error "Не удалось автоматически определить публичный IPv4-адрес сервера."
+    log_error "Не удалось определить IPv4."
 fi
 
-log_info "Публичный IP-адрес сервера: $SERVER_IP"
+log_info "IP сервера: $SERVER_IP"
 
 mkdir -p "$CERT_DIR"
-
-log_info "Создание ключа ${KEY_FILE} и сертификата ${CERT_FILE}..."
 
 if ! openssl req -x509 -nodes -newkey rsa:2048 \
     -keyout "$KEY_FILE" \
@@ -249,27 +259,26 @@ if ! openssl req -x509 -nodes -newkey rsa:2048 \
     -days 3650 \
     -subj "/CN=${SERVER_IP}" \
     -addext "subjectAltName = IP:${SERVER_IP}"; then
-    log_error "Ошибка при генерации TLS сертификата с помощью openssl."
+    log_error "Ошибка генерации TLS сертификата."
 fi
 
 if [[ ! -f "$CERT_FILE" || ! -f "$KEY_FILE" ]]; then
-    log_error "Файлы TLS сертификата (${CERT_FILE}) или ключа (${KEY_FILE}) не найдены после генерации."
+    log_error "Файлы TLS не найдены."
 fi
 
-log_info "TLS сертификат успешно сгенерирован для IP: $SERVER_IP"
+log_info "TLS сертификат сгенерирован для IP: $SERVER_IP"
 
 chmod 644 "$CERT_FILE"
-chgrp nobody "$KEY_FILE" 2>/dev/null || chgrp nogroup "$KEY_FILE" 2>/dev/null || log_warn "Не удалось изменить группу файла ключа ${KEY_FILE}."
+chgrp nobody "$KEY_FILE" 2>/dev/null || chgrp nogroup "$KEY_FILE" 2>/dev/null || log_warn "Не удалось chgrp ключ."
 chmod 640 "$KEY_FILE"
 
-log_info "Установлены права доступа к файлам сертификата (Сертификат: 644, Ключ: 640)."
+log_info "Права на сертификаты установлены."
 
-# Создание конфигурационного файла Xray
-log_info "Создание конфигурационного файла Xray: ${CONFIG_DIR}/config.json"
+# Создание конфигурации Xray
+log_info "Создание ${CONFIG_DIR}/config.json..."
 
 mkdir -p "$LOG_DIR"
-chown nobody:nobody "$LOG_DIR" 2>/dev/null || chown nobody:nogroup "$LOG_DIR" 2>/dev/null || log_warn "Не удалось изменить владельца ${LOG_DIR}."
-
+chown nobody:nobody "$LOG_DIR" 2>/dev/null || chown nobody:nogroup "$LOG_DIR" 2>/dev/null || log_warn "Не удалось chown LOG_DIR."
 mkdir -p "$CONFIG_DIR"
 
 if [[ "$INSTALL_MODE" == "ws" ]]; then
@@ -287,7 +296,6 @@ if [[ "$INSTALL_MODE" == "ws" ]]; then
       "https://9.9.9.9/dns-query",
       "1.1.1.1",
       "8.8.8.8",
-      "9.9.9.9",
       "localhost"
     ],
     "queryStrategy": "UseIP"
@@ -356,7 +364,7 @@ if [[ "$INSTALL_MODE" == "ws" ]]; then
   }
 }
 EOF
-else
+elif [[ "$INSTALL_MODE" == "xhttp" ]]; then
   cat > "${CONFIG_DIR}/config.json" << EOF
 {
   "log": {
@@ -371,7 +379,6 @@ else
       "https://9.9.9.9/dns-query",
       "1.1.1.1",
       "8.8.8.8",
-      "9.9.9.9",
       "localhost"
     ],
     "queryStrategy": "UseIP"
@@ -437,76 +444,207 @@ else
   }
 }
 EOF
+else
+  # Режим both: оба inbound
+  cat > "${CONFIG_DIR}/config.json" << EOF
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "${LOG_DIR}/access.log",
+    "error": "${LOG_DIR}/error.log"
+  },
+  "dns": {
+    "servers": [
+      "https://1.1.1.1/dns-query",
+      "https://8.8.8.8/dns-query",
+      "https://9.9.9.9/dns-query",
+      "1.1.1.1",
+      "8.8.8.8",
+      "localhost"
+    ],
+    "queryStrategy": "UseIP"
+  },
+  "inbounds": [
+    {
+      "port": ${VLESS_PORT_WS},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${USER_UUID}"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "alpn": ["http/1.1"],
+          "minVersion": "1.3",
+          "serverName": "google.com",
+          "certificates": [
+            {
+              "certificateFile": "${CERT_FILE}",
+              "keyFile": "${KEY_FILE}"
+            }
+          ]
+        },
+        "wsSettings": {
+          "path": "${WS_PATH}",
+          "headers": {
+            "Host": "google.com"
+          }
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "fakedns"]
+      }
+    },
+    {
+      "port": ${VLESS_PORT_XHTTP},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${USER_UUID}"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "alpn": ["h2", "http/1.1"],
+          "serverName": "google.com",
+          "minVersion": "1.2",
+          "certificates": [
+            {
+              "certificateFile": "${CERT_FILE}",
+              "keyFile": "${KEY_FILE}"
+            }
+          ]
+        },
+        "xhttpSettings": {
+          "mode": "stream-one"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "fakedns"]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {},
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "settings": {},
+      "tag": "block"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "port": 53,
+        "network": "udp",
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}
+EOF
 fi
 
-log_info "Конфигурационный файл Xray создан."
+log_info "Конфиг Xray создан."
 
 # Проверка конфигурации Xray
 log_info "Проверка конфигурации Xray..."
 
 if ! /usr/local/bin/xray -test -config "${CONFIG_DIR}/config.json"; then
-    log_error "Конфигурация Xray (${CONFIG_DIR}/config.json) содержит ошибки."
+    log_error "Конфиг Xray содержит ошибки."
 fi
 
-log_info "Конфигурация Xray корректна."
+log_info "Конфиг Xray корректен."
 
 # Настройка и запуск службы Xray
-log_info "Настройка и перезапуск службы Xray через systemd..."
+log_info "Настройка и перезапуск службы Xray..."
 
-systemctl enable xray || log_warn "Не удалось включить автозапуск службы Xray."
-systemctl restart xray || log_error "Не удалось перезапустить службу Xray."
+systemctl enable xray || log_warn "Не удалось enable xray."
+systemctl restart xray || log_error "Не удалось restart xray."
 
-log_info "Ожидание запуска службы Xray (3 секунды)..."
+log_info "Ожидание запуска (3 сек)..."
 sleep 3
 
 if ! systemctl is-active --quiet xray; then
-    log_error "Служба Xray не запустилась. Проверьте логи: journalctl -u xray -n 50 --no-pager или ${LOG_DIR}/error.log"
+    log_error "Служба Xray не запустилась. Логи: journalctl -u xray -n 50 или ${LOG_DIR}/error.log"
 fi
 
-log_info "Служба Xray успешно запущена и работает."
+log_info "Служба Xray запущена."
 
-# Генерация VLESS ссылки и QR-кода
-log_info "Генерация VLESS ссылки и QR-кода..."
+# Генерация VLESS ссылок и QR-кодов
+log_info "Генерация VLESS ссылок и QR-кодов..."
 
 if ! command -v jq &> /dev/null; then
-    log_error "Команда 'jq' не найдена."
+    log_error "'jq' не найден."
 fi
 
 WS_PATH_ENCODED=$(printf %s "$WS_PATH" | jq -sRr @uri)
 
 if [[ -z "$WS_PATH_ENCODED" ]]; then
-    log_error "Не удалось URL-кодировать путь WebSocket."
+    log_error "URL-кодирование пути WS не удалось."
 fi
 
-if [[ "$INSTALL_MODE" == "ws" ]]; then
-  VLESS_LINK="vless://${USER_UUID}@${SERVER_IP}:${VLESS_PORT_WS}?type=ws&path=${WS_PATH_ENCODED}&security=tls&sni=google.com&allowInsecure=1#VLESS-WS-TLS-google.com"
-else
-  VLESS_LINK="vless://${USER_UUID}@${SERVER_IP}:${VLESS_PORT_XHTTP}?type=xhttp&security=tls&sni=google.com&alpn=h2&allowInsecure=1#VLESS-XHTTP-google.com"
-fi
+VLESS_LINK_WS="vless://${USER_UUID}@${SERVER_IP}:${VLESS_PORT_WS}?type=ws&path=${WS_PATH_ENCODED}&security=tls&sni=google.com&allowInsecure=1#VLESS-WS-TLS-google.com"
+VLESS_LINK_XHTTP="vless://${USER_UUID}@${SERVER_IP}:${VLESS_PORT_XHTTP}?type=xhttp&security=tls&sni=google.com&alpn=h2&allowInsecure=1#VLESS-XHTTP-google.com"
 
-QR_CODE_GENERATED=false
+QR_WS_GENERATED=false
+QR_XHTTP_GENERATED=false
 
 if command -v qrencode &> /dev/null; then
-    if qrencode -o "$QR_CODE_FILE" "$VLESS_LINK"; then
-        log_info "QR-код сохранен в файл: ${QR_CODE_FILE}"
-        QR_CODE_GENERATED=true
-        if [[ "$NEED_CHOWN_QR" = true ]]; then
+    if [[ "$INSTALL_MODE" == "ws" || "$INSTALL_MODE" == "both" ]]; then
+      if qrencode -o "$QR_CODE_FILE_WS" "$VLESS_LINK_WS"; then
+          log_info "QR-код WS: ${QR_CODE_FILE_WS}"
+          QR_WS_GENERATED=true
+          if [[ "$NEED_CHOWN_QR" = true ]]; then
             if command -v id &> /dev/null; then
                 SUDO_USER_GROUP=$(id -gn "$SUDO_USER" 2>/dev/null)
                 if [[ -n "$SUDO_USER_GROUP" ]]; then
-                     chown "$SUDO_USER":"$SUDO_USER_GROUP" "$QR_CODE_FILE" || log_warn "Не удалось изменить владельца файла QR-кода (${QR_CODE_FILE})."
-                else
-                     log_warn "Не удалось определить группу для пользователя $SUDO_USER."
+                     chown "$SUDO_USER":"$SUDO_USER_GROUP" "$QR_CODE_FILE_WS" || log_warn "chown QR_WS ошибка."
                 fi
-            else
-                log_warn "Команда 'id' не найдена. Невозможно изменить владельца QR-кода."
             fi
-        fi
-    else
-        log_warn "Не удалось сгенерировать QR-код в ${QR_CODE_FILE}."
+          fi
+      else
+          log_warn "QR-код WS не сгенерирован."
+      fi
+    fi
+
+    if [[ "$INSTALL_MODE" == "xhttp" || "$INSTALL_MODE" == "both" ]]; then
+      if qrencode -o "$QR_CODE_FILE_XHTTP" "$VLESS_LINK_XHTTP"; then
+          log_info "QR-код XHTTP: ${QR_CODE_FILE_XHTTP}"
+          QR_XHTTP_GENERATED=true
+          if [[ "$NEED_CHOWN_QR" = true ]]; then
+            if command -v id &> /dev/null; then
+                SUDO_USER_GROUP=$(id -gn "$SUDO_USER" 2>/dev/null)
+                if [[ -n "$SUDO_USER_GROUP" ]]; then
+                     chown "$SUDO_USER":"$SUDO_USER_GROUP" "$QR_CODE_FILE_XHTTP" || log_warn "chown QR_XHTTP ошибка."
+                fi
+            fi
+          fi
+      else
+          log_warn "QR-код XHTTP не сгенерирован."
+      fi
     fi
 else
-    log_warn "Команда 'qrencode' не найдена. QR-код не сгенерирован."
+    log_warn "'qrencode' не найден. QR-коды не сгенерированы."
 fi
 
 # Вывод итоговой информации
@@ -515,63 +653,83 @@ log_info "${BGreen} Установка VLESS VPN завершена! ${Color_Off
 log_info "=================================================="
 
 echo -e "${BYellow}IP-адрес сервера:${Color_Off} ${SERVER_IP}"
-if [[ "$INSTALL_MODE" == "ws" ]]; then
-  echo -e "${BYellow}Порт:${Color_Off} ${VLESS_PORT_WS}"
-  echo -e "${BYellow}Режим:${Color_Off} VLESS + WS + TLS"
-  echo -e "${BYellow}Путь WebSocket:${Color_Off} ${WS_PATH}"
-else
-  echo -e "${BYellow}Порт:${Color_Off} ${VLESS_PORT_XHTTP}"
-  echo -e "${BYellow}Режим:${Color_Off} VLESS + XHTTP"
-fi
-
-echo -e "${BYellow}UUID:${Color_Off} ${USER_UUID}"
+echo -e "${BYellow}UUID (общий):${Color_Off} ${USER_UUID}"
 echo -e "${BYellow}SNI/Host:${Color_Off} google.com"
-echo -e "${BYellow}Шифрование:${Color_Off} TLS (самоподписанный сертификат)"
-echo -e "${BYellow}TCP Ускорение:${Color_Off} BBR включен (рекомендуется)"
-
-echo ""
-echo -e "${BGreen}Ваша VLESS ссылка (скопируйте целиком):${Color_Off}"
-echo -e "${VLESS_LINK}"
+echo -e "${BYellow}Шифрование:${Color_Off} TLS (самоподписанный)"
+echo -e "${BYellow}TCP BBR:${Color_Off} включен"
 echo ""
 
-if [[ "$QR_CODE_GENERATED" = true ]]; then
-    echo -e "${BGreen}QR-код для импорта конфигурации сохранен в:${Color_Off} ${QR_CODE_FILE}"
-    echo -e "${BYellow}Вы можете отобразить QR-код в консоли (если поддерживается UTF-8) командой:${Color_Off}"
-    echo -e "  qrencode -t ansiutf8 \"${VLESS_LINK}\""
-    echo ""
+if [[ "$INSTALL_MODE" == "ws" ]]; then
+  echo -e "${BGreen}=== VLESS + WS + TLS ===${Color_Off}"
+  echo -e "${BYellow}Порт:${Color_Off} ${VLESS_PORT_WS}"
+  echo -e "${BYellow}Путь WS:${Color_Off} ${WS_PATH}"
+  echo ""
+  echo -e "${BGreen}Ссылка:${Color_Off}"
+  echo -e "${VLESS_LINK_WS}"
+  echo ""
+  if [[ "$QR_WS_GENERATED" = true ]]; then
+      echo -e "${BGreen}QR-код:${Color_Off} ${QR_CODE_FILE_WS}"
+      echo -e "${BYellow}Команда:${Color_Off} qrencode -t ansiutf8 \"${VLESS_LINK_WS}\""
+      echo ""
+  fi
+elif [[ "$INSTALL_MODE" == "xhttp" ]]; then
+  echo -e "${BGreen}=== VLESS + XHTTP ===${Color_Off}"
+  echo -e "${BYellow}Порт:${Color_Off} ${VLESS_PORT_XHTTP}"
+  echo ""
+  echo -e "${BGreen}Ссылка:${Color_Off}"
+  echo -e "${VLESS_LINK_XHTTP}"
+  echo ""
+  if [[ "$QR_XHTTP_GENERATED" = true ]]; then
+      echo -e "${BGreen}QR-код:${Color_Off} ${QR_CODE_FILE_XHTTP}"
+      echo -e "${BYellow}Команда:${Color_Off} qrencode -t ansiutf8 \"${VLESS_LINK_XHTTP}\""
+      echo ""
+  fi
 else
-    echo -e "${BYellow}QR-код не был сгенерирован.${Color_Off}"
-    echo ""
+  echo -e "${BGreen}=== VLESS + WS + TLS (Port ${VLESS_PORT_WS}) ===${Color_Off}"
+  echo -e "${BYellow}Путь WS:${Color_Off} ${WS_PATH}"
+  echo ""
+  echo -e "${BGreen}Ссылка WS:${Color_Off}"
+  echo -e "${VLESS_LINK_WS}"
+  echo ""
+  if [[ "$QR_WS_GENERATED" = true ]]; then
+      echo -e "${BGreen}QR-код WS:${Color_Off} ${QR_CODE_FILE_WS}"
+      echo -e "${BYellow}Команда:${Color_Off} qrencode -t ansiutf8 \"${VLESS_LINK_WS}\""
+      echo ""
+  fi
+
+  echo -e "${BGreen}=== VLESS + XHTTP (Port ${VLESS_PORT_XHTTP}) ===${Color_Off}"
+  echo ""
+  echo -e "${BGreen}Ссылка XHTTP:${Color_Off}"
+  echo -e "${VLESS_LINK_XHTTP}"
+  echo ""
+  if [[ "$QR_XHTTP_GENERATED" = true ]]; then
+      echo -e "${BGreen}QR-код XHTTP:${Color_Off} ${QR_CODE_FILE_XHTTP}"
+      echo -e "${BYellow}Команда:${Color_Off} qrencode -t ansiutf8 \"${VLESS_LINK_XHTTP}\""
+      echo ""
+  fi
 fi
 
 echo -e "${BYellow}ВАЖНО - Настройка клиента:${Color_Off}"
-echo -e "  1. Импортируйте ссылку или QR-код в ваш клиент."
-echo -e "  2. ${BRed}ОБЯЗАТЕЛЬНО${Color_Off} включите опцию '${BRed}Разрешить небезопасное соединение${Color_Off}'"
-echo -e "     (Allow Insecure / skip cert verify / tlsAllowInsecure=1 и т.п.) в настройках TLS/Security."
-echo -e "  3. Убедитесь, что в поле SNI (Server Name Indication), Server Address, или Host указан домен:"
-echo -e "     ${BRed}google.com${Color_Off}"
-echo -e "  4. В качестве адреса сервера указывайте публичный IP (или домен, если настроите)."
-
+echo -e "  1. Импортируйте ссылку или QR-код."
+echo -e "  2. ${BRed}ОБЯЗАТЕЛЬНО${Color_Off} включите '${BRed}Разрешить небезопасное${Color_Off}'"
+echo -e "     (Allow Insecure / skip cert verify / tlsAllowInsecure=1)."
+echo -e "  3. Убедитесь, SNI/Host = ${BRed}google.com${Color_Off}"
+echo -e "  4. Адрес сервера = IP вашего VPS (или домен)."
 echo ""
-echo -е "${BCyan}--- Управление службой Xray ---${Color_Off}"
-echo -e "Проверить статус:    ${BYellow}systemctl status xray${Color_Off}"
-echo -e "Перезапустить:       ${BYellow}systemctl restart xray${Color_Off}"
-echo -e "Остановить:          ${BYellow}systemctl stop xray${Color_Off}"
-echo -e "Включить автозапуск: ${BYellow}systemctl enable xray${Color_Off}"
-echo -e "Выключить автозапуск:${BYellow}systemctl disable xray${Color_Off}"
 
+echo -e "${BCyan}--- Управление службой Xray ---${Color_Off}"
+echo -e "Статус:    ${BYellow}systemctl status xray${Color_Off}"
+echo -e "Перезапуск: ${BYellow}systemctl restart xray${Color_Off}"
+echo -e "Остановить:  ${BYellow}systemctl stop xray${Color_Off}"
+echo -e "Автозапуск: ${BYellow}systemctl enable xray${Color_Off}"
 echo ""
-echo -e "${BCyan}--- Просмотр логов Xray ---${Color_Off}"
-echo -e "Лог ошибок (warning/error):  ${BYellow}tail -f ${LOG_DIR}/error.log${Color_Off}"
-echo -e "Лог доступа (если включен):  ${BYellow}tail -f ${LOG_DIR}/access.log${Color_Off}"
-echo -e "Полный лог службы (systemd): ${BYellow}journalctl -u xray --output cat -f${Color_Off}"
 
+echo -e "${BCyan}--- Логи Xray ---${Color_Off}"
+echo -e "Ошибки:  ${BYellow}tail -f ${LOG_DIR}/error.log${Color_Off}"
+echo -e "Доступ:   ${BYellow}tail -f ${LOG_DIR}/access.log${Color_Off}"
+echo -e "systemd:  ${BYellow}journalctl -u xray --output cat -f${Color_Off}"
 echo ""
-echo -e "${BCyan}--- Дополнительная оптимизация ---${Color_Off}"
-echo -e "Для дальнейшей оптимизации скорости/задержки вы можете отредактировать файл ${CONFIG_DIR}/config.json"
-echo -e "и настроить параметры в секции 'policy', например, 'bufferSize'. Требуется тестирование."
 
-echo ""
 log_info "Установка завершена. Приятного использования!"
 
 set +eu
