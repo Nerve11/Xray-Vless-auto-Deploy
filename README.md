@@ -46,9 +46,9 @@ The script focuses on providing **low latency** for online gaming, stable connec
 1. Download the installation script:
    ```bash
    wget -O install-vless.sh \
-     https://raw.githubusercontent.com/Nerve11/Auto-intall-Xray-VLESS-WS-TLS/main/install-vless.sh
+     https://raw.githubusercontent.com/Nerve11/Xray-Vless-auto-Deploy/main/install-vless.sh
    # or
-   # curl -o install-vless.sh https://raw.githubusercontent.com/Nerve11/Auto-intall-Xray-VLESS-WS-TLS/main/install-vless.sh
+   # curl -o install-vless.sh https://raw.githubusercontent.com/Nerve11/Xray-Vless-auto-Deploy/main/install-vless.sh
    ```
 
 2. Make the script executable:
