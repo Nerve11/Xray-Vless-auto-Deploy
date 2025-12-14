@@ -381,9 +381,15 @@ elif [[ "$INSTALL_MODE" == "xhttp" ]]; then
         "network": "xhttp",
         "security": "none",
         "xhttpSettings": {
-          "mode": "stream-one",
+          "mode": "packet-up",
           "host": "${SNI_HOST}",
-          "path": "/"
+          "path": "",
+          "extra": {
+            "xPaddingBytes": {
+              "min": 10,
+              "max": 50
+            }
+          }
         }
       },
       "sniffing": {
@@ -484,9 +490,15 @@ else
         "network": "xhttp",
         "security": "none",
         "xhttpSettings": {
-          "mode": "stream-one",
+          "mode": "packet-up",
           "host": "${SNI_HOST}",
-          "path": "/"
+          "path": "",
+          "extra": {
+            "xPaddingBytes": {
+              "min": 10,
+              "max": 50
+            }
+          }
         }
       },
       "sniffing": {
@@ -568,7 +580,7 @@ if [[ -z "$WS_PATH_ENCODED" ]]; then
 fi
 
 VLESS_LINK_WS="vless://${USER_UUID}@${SERVER_IP}:${VLESS_PORT_WS}?type=ws&path=${WS_PATH_ENCODED}&host=${SNI_HOST}&security=none#VLESS-WS-${SNI_HOST}"
-VLESS_LINK_XHTTP="vless://${USER_UUID}@${SERVER_IP}:${VLESS_PORT_XHTTP}?type=xhttp&host=${SNI_HOST}&path=%2F&security=none#VLESS-XHTTP-${SNI_HOST}"
+VLESS_LINK_XHTTP="vless://${USER_UUID}@${SERVER_IP}:${VLESS_PORT_XHTTP}?type=xhttp&host=${SNI_HOST}&path=&security=none&mode=packet-up#VLESS-XHTTP-${SNI_HOST}"
 
 QR_WS_GENERATED=false
 QR_XHTTP_GENERATED=false
@@ -639,6 +651,8 @@ if [[ "$INSTALL_MODE" == "ws" ]]; then
 elif [[ "$INSTALL_MODE" == "xhttp" ]]; then
   echo -e "${BGreen}=== VLESS + XHTTP ===${Color_Off}"
   echo -e "${BYellow}Port:${Color_Off} ${VLESS_PORT_XHTTP}"
+  echo -e "${BYellow}Mode:${Color_Off} packet-up (bidirectional)"
+  echo -e "${BYellow}Padding:${Color_Off} 10-50 bytes (anti-DPI)"
   echo ""
   echo -e "${BGreen}VLESS Link:${Color_Off}"
   echo -e "${VLESS_LINK_XHTTP}"
@@ -662,6 +676,8 @@ else
   fi
 
   echo -e "${BGreen}=== VLESS + XHTTP (Port ${VLESS_PORT_XHTTP}) ===${Color_Off}"
+  echo -e "${BYellow}Mode:${Color_Off} packet-up (bidirectional)"
+  echo -e "${BYellow}Padding:${Color_Off} 10-50 bytes (anti-DPI)"
   echo ""
   echo -e "${BGreen}XHTTP Link:${Color_Off}"
   echo -e "${VLESS_LINK_XHTTP}"
@@ -678,6 +694,9 @@ echo -e "  1. Import the link or QR code into your VLESS client"
 echo -e "  2. Verify Host/SNI: ${BRed}${SNI_HOST}${Color_Off}"
 echo -e "  3. Security mode: ${BRed}none${Color_Off} (no TLS/certificates)"
 echo -e "  4. Server address: ${SERVER_IP}"
+if [[ "$INSTALL_MODE" == "xhttp" || "$INSTALL_MODE" == "both" ]]; then
+  echo -e "  5. XHTTP requires Xray-core based client (v2rayNG, Nekoray with xray-core)"
+fi
 echo ""
 
 echo -e "${BCyan}--- Xray Service Management ---${Color_Off}"
