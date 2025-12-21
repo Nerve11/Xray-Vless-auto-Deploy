@@ -1,0 +1,48 @@
+[Unit]
+Description=Xray Management Dashboard (FastAPI)
+After=network.target xray.service
+Wants=xray.service
+Documentation=https://github.com/Nerve11/Xray-Vless-auto-Deploy
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/xray-dashboard
+
+# Python virtual environment activation
+Environment="PATH=/opt/xray-dashboard/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+
+# Uvicorn startup command
+ExecStart=/opt/xray-dashboard/venv/bin/uvicorn backend.main:app \
+    --host 0.0.0.0 \
+    --port 8080 \
+    --workers 2 \
+    --log-level info \
+    --access-log \
+    --proxy-headers \
+    --forwarded-allow-ips='*'
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+PrivateTmp=true
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/var/log/xray /usr/local/etc/xray
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xray-dashboard
+
+[Install]
+WantedBy=multi-user.target
