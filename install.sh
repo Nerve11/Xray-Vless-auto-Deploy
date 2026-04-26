@@ -193,11 +193,16 @@ if not isinstance(profiles, list) or not profiles:
     raise SystemExit(2)
 
 for i, p in enumerate(profiles, 1):
+    if i == 1:
+        header = f"{'#':>3}  {'ID':<30} {'Protocol':<10} {'Transport':<10} {'Security':<10}"
+        print(header)
+        print("-" * len(header))
     pid = p.get("id", "")
     proto = p.get("protocol", "")
     transport = p.get("transport", "")
     sec = p.get("security", "none")
-    print(f"{i}) {pid}  protocol={proto} transport={transport} security={sec}")
+    print(f"{i:2}) {pid:<30} {proto:<10} {transport:<10} {sec:<10}")
+
 PY
 
   echo >&2
@@ -438,9 +443,16 @@ PY
   xray_bin="$(command -v xray)"
   write_systemd_service "$xray_bin" "$xray_dir/config.json"
 
-  echo "Установка завершена"
-  echo "Server config: $xray_dir/config.json"
-  echo "Client config: $xray_dir/client.json"
+  GREEN='\033[0;32m'
+  CYAN='\033[0;36m'
+  YELLOW='\033[1;33m'
+  BOLD='\033[1m'
+  NC='\033[0m'
+
+  printf "\n${GREEN}${BOLD}✨  Установка завершена успешно! ✨${NC}\n"
+  echo "--------------------------------------------------"
+  printf "Server config: ${CYAN}%s${NC}\n" "$xray_dir/config.json"
+  printf "Client config: ${CYAN}%s${NC}\n" "$xray_dir/client.json"
 
   local share_json share_link
   share_json="$(python3 "$SCRIPT_DIR/generator/xpad.py" share --profile "$profile" --params "$xray_dir/params.effective.json" 2>/dev/null || true)"
@@ -459,7 +471,7 @@ if isinstance(obj, dict) and obj.get("ok") and obj.get("link"):
 PY
 )"
   if [ -n "$share_link" ]; then
-    echo "Link: $share_link"
+    printf "Link: ${YELLOW}%s${NC}\n" "$share_link"
     printf '%s\n' "profile=$profile" "server=$server_addr:$server_port" "link=$share_link" "client_json=$xray_dir/client.json" > /root/xray_client_info.txt
     chmod 600 /root/xray_client_info.txt >/dev/null 2>&1 || true
     echo "Saved: /root/xray_client_info.txt"
